@@ -34,6 +34,9 @@ pub fn wait_for(child: &mut Child, secs: usize) -> Option<ExitStatus> {
 				if i > 5 {
 					eprintln!("Child process took {} seconds to exit gracefully", i);
 				}
+				if !status.success() {
+					eprintln!("Child process exit with error: {:?}", status);
+				}
 				return Some(status)
 			},
 			None => thread::sleep(Duration::from_secs(1)),
@@ -48,7 +51,7 @@ pub fn wait_for(child: &mut Child, secs: usize) -> Option<ExitStatus> {
 
 /// Run the node for a while (30 seconds)
 pub fn run_dev_node_for_a_while(base_path: &Path) {
-	let mut cmd = Command::new(cargo_bin("substrate"));
+	let mut cmd = Command::new(cargo_bin("phala-node"));
 
 	let mut cmd = cmd
 		.args(&["--dev"])

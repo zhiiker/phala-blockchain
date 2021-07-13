@@ -32,10 +32,6 @@ use subxt::{
         Balances,
         BalancesEventTypeRegistry,
     },
-    contracts::{
-        Contracts,
-        ContractsEventTypeRegistry,
-    },
     session::{
         Session,
         SessionEventTypeRegistry,
@@ -58,14 +54,11 @@ use subxt::{
     register_default_type_sizes
 };
 
-use self::phala::PhalaEventTypeRegistry;
-
 /// PhalaNode concrete type definitions compatible with those for kusama, v0.7
 ///
 /// # Note
 ///
 /// Main difference is `type Address = AccountId`.
-/// Also the contracts module is not part of the kusama runtime.
 #[derive(Debug, Clone, Eq, PartialEq, Default)]
 pub struct PhalaNodeRuntime;
 
@@ -75,15 +68,22 @@ impl Runtime for PhalaNodeRuntime {
 
     fn register_type_sizes(event_type_registry: &mut EventTypeRegistry<Self>) {
         event_type_registry.with_system();
-        event_type_registry.with_contracts();
         event_type_registry.with_sudo();
-
-        event_type_registry.with_phala();
         event_type_registry.with_balances();
         event_type_registry.with_staking();
         event_type_registry.with_session();
 
+        use phala::PhalaEventTypeRegistry;
+        use chain_bridge::ChainBridgeEventTypeRegistry;
+
+        event_type_registry.with_phala();
+        event_type_registry.with_chain_bridge();
+
         register_default_type_sizes(event_type_registry);
+        event_type_registry
+            .register_type_size::<phala_types::messaging::Message>("PhalaMq::Message");
+        event_type_registry
+            .register_type_size::<u8>("bridge::ChainId");
     }
 }
 
@@ -103,8 +103,6 @@ impl Balances for PhalaNodeRuntime {
     type Balance = u128;
 }
 
-impl Contracts for PhalaNodeRuntime {}
-
 impl Staking for PhalaNodeRuntime {}
 
 impl Sudo for PhalaNodeRuntime {}
@@ -115,8 +113,11 @@ impl Session for PhalaNodeRuntime {
 }
 
 impl phala::Phala for PhalaNodeRuntime {}
+impl phala_mq::PhalaMq for PhalaNodeRuntime {}
 
 impl mining_staking::MiningStaking for PhalaNodeRuntime {}
+
+impl chain_bridge::ChainBridge for PhalaNodeRuntime {}
 
 pub mod grandpa {
     use super::PhalaNodeRuntime;
@@ -148,89 +149,24 @@ pub mod grandpa {
 pub mod phala {
     use codec::{Encode, Decode};
     use subxt::{
-        module, Call, Store,
+        module, Store,
         system::System,
         balances::Balances
     };
     use core::marker::PhantomData;
-
-    use phala_types::{BlockRewardInfo, PayoutReason};
+    use phala_types::{PayoutReason, WorkerPublicKey};
 
     #[derive(Encode, Decode, Debug, Default, Clone, PartialEq, Eq)]
     pub struct EthereumTxHash([u8; 32]);
+
     #[derive(Encode, Decode, Debug, Default, Clone, PartialEq, Eq)]
     pub struct EthereumAddress([u8; 20]);
 
+
     #[module]
     pub trait Phala: System + Balances {
-        #![event_type(BlockRewardInfo)]
         #![event_type(PayoutReason)]
-
-        // Types used by pallets/claim
-        #![event_type(EthereumTxHash)]
-        #![event_type(EthereumAddress)]
-    }
-
-    #[derive(Clone, Debug, PartialEq, Call, Encode)]
-    pub struct PushCommandCall<T: Phala> {
-        pub _runtime: PhantomData<T>,
-        pub contract_id: u32,
-        pub payload: Vec<u8>,
-    }
-
-    /// The call to transfer_to_tee
-    #[derive(Clone, Debug, PartialEq, Call, Encode)]
-    pub struct TransferToTeeCall<T: Phala> {
-        /// The amount will transfer to tee account
-        #[codec(compact)]
-        pub amount: <T as Balances>::Balance,
-    }
-
-    /// The call to transfer_to_chain
-    #[derive(Clone, Debug, PartialEq, Call, Encode)]
-    pub struct TransferToChainCall<T: Phala> {
-        /// Runtime marker
-        pub _runtime: PhantomData<T>,
-        /// The transfer transaction data, SCALE encoded
-        pub data: Vec<u8>,
-    }
-
-    /// The call to register_worker
-    #[derive(Clone, Debug, PartialEq, Call, Encode)]
-    pub struct RegisterWorkerCall<T: Phala> {
-        /// Runtime marker
-        pub _runtime: PhantomData<T>,
-        /// The encoded runtime info
-        pub encoded_runtime_info: Vec<u8>,
-        /// The report
-        pub report: Vec<u8>,
-        /// The signature
-        pub signature: Vec<u8>,
-        /// The signing cert
-        pub raw_signing_cert: Vec<u8>,
-    }
-
-    /// The call to reset_worker
-    #[derive(Clone, Debug, PartialEq, Call, Encode)]
-    pub struct ResetWorkerCall<T: Phala> {
-        /// Runtime marker
-        pub _runtime: PhantomData<T>,
-    }
-
-    #[derive(Clone, Debug, Eq, PartialEq, Store, Encode)]
-    pub struct IngressSequenceStore<T: Phala> {
-        #[store(returns = u64)]
-        /// Runtime marker.
-        pub _runtime: PhantomData<T>,
-        pub contract_id: u32,
-    }
-    impl<T: Phala> IngressSequenceStore<T> {
-        pub fn new(contract_id: u32) -> Self {
-            Self {
-                _runtime: Default::default(),
-                contract_id,
-            }
-        }
+        #![event_type(WorkerPublicKey)]
     }
 
     #[derive(Clone, Debug, Eq, PartialEq, Store, Encode)]
@@ -248,75 +184,62 @@ pub mod phala {
             }
         }
     }
-    /// The call to transfer_to_chain
+}
+
+pub mod phala_registry {
+    use codec::Encode;
+    use phala_types::PRuntimeInfo;
+    use core::marker::PhantomData;
+    use phala_pallets::registry::Attestation;
+    use subxt::{module, system::System, Call};
+
+    #[module]
+    pub trait PhalaRegistry: System {}
+    impl PhalaRegistry for super::PhalaNodeRuntime {}
+
+    /// The call to register_worker
     #[derive(Clone, Debug, PartialEq, Call, Encode)]
-    pub struct HeartbeatCall<T: Phala> {
+    pub struct RegisterWorkerCall<T: PhalaRegistry> {
         /// Runtime marker
         pub _runtime: PhantomData<T>,
-        /// The heartbeat data, SCALE encoded
-        pub data: Vec<u8>,
+        /// The runtime info
+        pub pruntime_info: PRuntimeInfo<T::AccountId>,
+        /// The enclave attestation
+        pub attestation: Attestation,
     }
+}
 
-    /// Storage: Stash
-    #[derive(Clone, Debug, Eq, PartialEq, Store, Encode)]
-    pub struct StashStore<T: Phala> {
-        #[store(returns = T::AccountId)]
+pub mod phala_mq {
+    use codec::Encode;
+    use core::marker::PhantomData;
+    use subxt::{balances::Balances, module, system::System, Call, Store};
+
+    use phala_types::messaging::{MessageOrigin, SignedMessage};
+
+    #[module]
+    pub trait PhalaMq: System + Balances {}
+
+    #[derive(Clone, Debug, PartialEq, Call, Encode)]
+    pub struct SyncOffchainMessageCall<T: PhalaMq> {
         pub _runtime: PhantomData<T>,
-        pub account_id: T::AccountId,
-    }
-    impl<T: Phala> StashStore<T> {
-        pub fn new(account_id: T::AccountId) -> Self {
-            Self {
-                _runtime: Default::default(),
-                account_id,
-            }
-        }
+        pub message: SignedMessage,
     }
 
-    /// Storage: WorkerIngress
     #[derive(Clone, Debug, Eq, PartialEq, Store, Encode)]
-    pub struct WorkerIngressStore<T: Phala> {
+    pub struct OffchainIngressStore<T: PhalaMq> {
         #[store(returns = u64)]
+        /// Runtime marker.
         pub _runtime: PhantomData<T>,
-        pub account_id: T::AccountId,
+        pub sender: MessageOrigin,
     }
-    impl<T: Phala> WorkerIngressStore<T> {
-        pub fn new(account_id: T::AccountId) -> Self {
+
+    impl<T: PhalaMq> OffchainIngressStore<T> {
+        pub fn new(sender: MessageOrigin) -> Self {
             Self {
                 _runtime: Default::default(),
-                account_id,
+                sender,
             }
         }
-    }
-
-    /// Storage: OnlineWorkers
-    #[derive(Clone, Debug, Eq, PartialEq, Store, Encode, Default)]
-    pub struct OnlineWorkers<T: Phala> {
-        #[store(returns = u32)]
-        pub _runtime: PhantomData<T>,
-    }
-    /// Storage: ComputeWorkers
-    #[derive(Clone, Debug, Eq, PartialEq, Store, Encode, Default)]
-    pub struct ComputeWorkers<T: Phala> {
-        #[store(returns = u32)]
-        pub _runtime: PhantomData<T>,
-    }
-
-    /// Storage: WorkerState
-    #[derive(Clone, Debug, Eq, PartialEq, Store, Encode)]
-    pub struct WorkerStateStore<T: Phala> {
-        #[store(returns = phala_types::WorkerInfo<T::BlockNumber>)]
-        pub _runtime: PhantomData<T>,
-        pub account_id: T::AccountId,
-    }
-
-    /// The call to sync_worker_message
-    #[derive(Clone, Debug, PartialEq, Call, Encode)]
-    pub struct SyncWorkerMessageCall<T: Phala> {
-        /// Runtime marker
-        pub _runtime: PhantomData<T>,
-        /// The raw message, SCALE encoded
-        pub msg: Vec<u8>,
     }
 }
 
@@ -345,5 +268,19 @@ pub mod mining_staking {
         #[store(returns = <T as Balances>::Balance)]
         pub _runtime: PhantomData<T>,
         pub to: T::AccountId,
+    }
+}
+
+pub mod chain_bridge {
+    use subxt::{
+        module,
+        system::System,
+    };
+    #[module]
+    pub trait ChainBridge: System {
+        #![event_alias(ChainId = u8)]
+        #![event_alias(ResourceId = [u8; 32])]
+        #![event_alias(DepositNonce = u64)]
+        #![event_alias(U256 = sp_core::U256)]
     }
 }

@@ -22,10 +22,11 @@ use sc_chain_spec::{ChainSpecExtension, Properties};
 use sp_core::{Pair, Public, crypto::UncheckedInto, sr25519};
 use serde::{Serialize, Deserialize};
 use node_runtime::{
-	AuthorityDiscoveryConfig, BabeConfig, BalancesConfig, ContractsConfig, CouncilConfig,
+	AuthorityDiscoveryConfig, BabeConfig, BalancesConfig, CouncilConfig,
 	DemocracyConfig,GrandpaConfig, ImOnlineConfig, SessionConfig, SessionKeys, StakerStatus,
 	StakingConfig, ElectionsConfig, IndicesConfig, SocietyConfig, SudoConfig, SystemConfig,
-	TechnicalCommitteeConfig, PhalaConfig, wasm_binary_unwrap,
+	TechnicalCommitteeConfig, wasm_binary_unwrap, BridgeTransferConfig, KittyStorageConfig,
+	PhalaRegistryConfig,
 };
 use node_runtime::Block;
 use node_runtime::constants::currency::*;
@@ -37,6 +38,7 @@ use sp_consensus_babe::{AuthorityId as BabeId};
 use pallet_im_online::sr25519::{AuthorityId as ImOnlineId};
 use sp_authority_discovery::AuthorityId as AuthorityDiscoveryId;
 use sp_runtime::{Perbill, traits::{Verify, IdentifyAccount}};
+use pallet_bridge;
 
 pub use node_primitives::{AccountId, Balance, Signature};
 pub use node_runtime::GenesisConfig;
@@ -216,7 +218,7 @@ pub fn testnet_genesis(
 	)>,
 	root_key: AccountId,
 	endowed_accounts: Option<Vec<AccountId>>,
-	enable_println: bool,
+	dev: bool,
 ) -> GenesisConfig {
 	let mut endowed_accounts: Vec<AccountId> = endowed_accounts.unwrap_or_else(|| {
 		vec![
@@ -244,22 +246,35 @@ pub fn testnet_genesis(
 	const ENDOWMENT: Balance = 10_000_000 * DOLLARS;
 	const STASH: Balance = ENDOWMENT / 1000;
 	// The pubkey of "0x1"
-	let dev_ecdsa_pubkey: Vec<u8> = hex!["0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"].to_vec();
+	let raw_dev_ecdsa_pubkey: Vec<u8> = hex!["0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"].to_vec();
+	let dev_ecdsa_pubkey = sp_core::ecdsa::Public::from_full(raw_dev_ecdsa_pubkey.as_slice()).unwrap();
+	let dev_ecdh_pubkey = hex!["046b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c2964fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5"].to_vec();
+
+	let phala_registry = match dev {
+		true => PhalaRegistryConfig {
+			workers: vec![
+				(dev_ecdsa_pubkey.clone(), dev_ecdh_pubkey, Some(endowed_accounts[0].clone()))
+			],
+			gatekeepers: vec![dev_ecdsa_pubkey],
+			benchmark_duration: 1,
+		},
+		false => Default::default()
+	};
 
 	GenesisConfig {
-		frame_system: SystemConfig {
+		system: SystemConfig {
 			code: wasm_binary_unwrap().to_vec(),
 			changes_trie_config: Default::default(),
 		},
-		pallet_balances: BalancesConfig {
+		balances: BalancesConfig {
 			balances: endowed_accounts.iter().cloned()
 				.map(|x| (x, ENDOWMENT))
 				.collect()
 		},
-		pallet_indices: IndicesConfig {
+		indices: IndicesConfig {
 			indices: vec![],
 		},
-		pallet_session: SessionConfig {
+		session: SessionConfig {
 			keys: initial_authorities.iter().map(|x| {
 				(x.0.clone(), x.0.clone(), session_keys(
 					x.2.clone(),
@@ -269,15 +284,12 @@ pub fn testnet_genesis(
 				))
 			}).collect::<Vec<_>>(),
 		},
-		pallet_phala: PhalaConfig {
-			stakers: initial_authorities.iter().map(|x| {
-				(x.0.clone(), x.1.clone(), dev_ecdsa_pubkey.clone())
-			}).collect(),
+		kitty_storage: KittyStorageConfig {
 			// Now we have 4 contracts but reserver 10 for convenience
-			contract_keys: std::iter::repeat(dev_ecdsa_pubkey).take(10).collect(),
+			contract_keys: std::iter::repeat(raw_dev_ecdsa_pubkey).take(10).collect(),
 		},
-		pallet_staking: StakingConfig {
-			validator_count: initial_authorities.len() as u32 * 2,
+		staking: StakingConfig {
+			validator_count: initial_authorities.len() as u32,
 			minimum_validator_count: initial_authorities.len() as u32,
 			stakers: initial_authorities.iter().map(|x| {
 				(x.0.clone(), x.1.clone(), STASH, StakerStatus::Validator)
@@ -286,46 +298,41 @@ pub fn testnet_genesis(
 			slash_reward_fraction: Perbill::from_percent(10),
 			.. Default::default()
 		},
-		pallet_democracy: DemocracyConfig::default(),
-		pallet_elections_phragmen: ElectionsConfig {
+		democracy: DemocracyConfig::default(),
+		elections: ElectionsConfig {
 			members: endowed_accounts.iter()
 						.take((num_endowed_accounts + 1) / 2)
 						.cloned()
 						.map(|member| (member, STASH))
 						.collect(),
 		},
-		pallet_collective_Instance1: CouncilConfig::default(),
-		pallet_collective_Instance2: TechnicalCommitteeConfig {
+		council: CouncilConfig::default(),
+		technical_committee: TechnicalCommitteeConfig {
 			members: endowed_accounts.iter()
 						.take((num_endowed_accounts + 1) / 2)
 						.cloned()
 						.collect(),
 			phantom: Default::default(),
 		},
-		pallet_contracts: ContractsConfig {
-			// println should only be enabled on development chains
-			current_schedule: pallet_contracts::Schedule::default()
-				.enable_println(enable_println),
-		},
-		pallet_sudo: SudoConfig {
+		technical_membership: Default::default(),
+		sudo: SudoConfig {
 			key: root_key,
 		},
-		pallet_babe: BabeConfig {
+		babe: BabeConfig {
 			authorities: vec![],
 			epoch_config: Some(node_runtime::BABE_GENESIS_EPOCH_CONFIG),
 		},
-		pallet_im_online: ImOnlineConfig {
+		im_online: ImOnlineConfig {
 			keys: vec![],
 		},
-		pallet_authority_discovery: AuthorityDiscoveryConfig {
+		authority_discovery: AuthorityDiscoveryConfig {
 			keys: vec![],
 		},
-		pallet_grandpa: GrandpaConfig {
+		grandpa: GrandpaConfig {
 			authorities: vec![],
 		},
-		pallet_membership_Instance1: Default::default(),
-		pallet_treasury: Default::default(),
-		pallet_society: SocietyConfig {
+		treasury: Default::default(),
+		society: SocietyConfig {
 			members: endowed_accounts.iter()
 						.take((num_endowed_accounts + 1) / 2)
 						.cloned()
@@ -333,7 +340,12 @@ pub fn testnet_genesis(
 			pot: 0,
 			max_members: 999,
 		},
-		pallet_vesting: Default::default(),
+		vesting: Default::default(),
+		bridge_transfer: BridgeTransferConfig {
+			bridge_tokenid: pallet_bridge::derive_resource_id(1, &pallet_bridge::hashing::blake2_128(b"PHA")),
+			bridge_lotteryid: pallet_bridge::derive_resource_id(1, &pallet_bridge::hashing::blake2_128(b"lottery")),
+		},
+		phala_registry,
 	}
 }
 
@@ -377,6 +389,14 @@ fn local_testnet_genesis() -> GenesisConfig {
 
 /// Local testnet config (multivalidator Alice + Bob)
 pub fn local_testnet_config() -> ChainSpec {
+	let properties = {
+		let mut p = Properties::new();
+		p.insert("tokenSymbol".into(), "PHA".into());
+		p.insert("tokenDecimals".into(), 12.into());
+		p.insert("ss58Format".into(), 30.into());
+		p
+	};
+
 	ChainSpec::from_genesis(
 		"Local Testnet",
 		"local_testnet",
@@ -385,7 +405,7 @@ pub fn local_testnet_config() -> ChainSpec {
 		vec![],
 		None,
 		None,
-		None,
+		Some(properties),
 		Default::default(),
 	)
 }

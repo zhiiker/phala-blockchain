@@ -1,17 +1,15 @@
-// Creating mock runtime here
+use crate::{mining, mq, registry, stakepool};
 
-use crate as phala;
+use frame_support::{parameter_types, traits::GenesisBuild};
+use frame_support_test::TestRandomness;
+use frame_system as system;
 use sp_core::H256;
 use sp_runtime::{
-	Permill,
-	traits::{BlakeTwo256, IdentityLookup}, testing::Header,
+	testing::Header,
+	traits::{BlakeTwo256, IdentityLookup},
 };
-use frame_system as system;
-use frame_support::{parameter_types};
-use frame_support_test::TestRandomness;
 
 pub(crate) type Balance = u128;
-pub(crate) type BlockNumber = u64;
 
 type UncheckedExtrinsic = frame_system::mocking::MockUncheckedExtrinsic<Test>;
 type Block = frame_system::mocking::MockBlock<Test>;
@@ -26,14 +24,21 @@ frame_support::construct_runtime!(
 		System: frame_system::{Pallet, Call, Config, Storage, Event<T>},
 		Timestamp: pallet_timestamp::{Pallet, Call, Storage, Inherent},
 		Balances: pallet_balances::{Pallet, Call, Storage, Config<T>, Event<T>},
-		PhalaPallet: phala::{Pallet, Call, Config<T>, Storage, Event<T>},
+		// Pallets to test
+		PhalaMq: mq::{Pallet, Event},
+		PhalaRegistry: registry::{Pallet, Event, Storage, Config<T>},
+		PhalaMining: mining::{Pallet, Event<T>},
+		PhalaStakePool: stakepool::{Pallet, Event<T>},
 	}
 );
 
 parameter_types! {
 	pub const BlockHashCount: u64 = 250;
-	pub const SS58Prefix: u8 = 42;
+	pub const SS58Prefix: u8 = 20;
 	pub const MinimumPeriod: u64 = 1;
+	pub const ExpectedBlockTimeSec: u32 = 12;
+	pub const MinMiningStaking: Balance = 1 * DOLLARS;
+	pub const MinDeposit: Balance = 1 * CENTS;
 }
 impl system::Config for Test {
 	type BaseCallFilter = ();
@@ -69,6 +74,8 @@ impl pallet_balances::Config for Test {
 	type AccountStore = System;
 	type WeightInfo = ();
 	type MaxLocks = ();
+	type MaxReserves = ();
+	type ReserveIdentifier = [u8; 8];
 }
 
 impl pallet_timestamp::Config for Test {
@@ -78,45 +85,34 @@ impl pallet_timestamp::Config for Test {
 	type WeightInfo = ();
 }
 
-pub const HOURS: BlockNumber = 600;
-pub const DAYS: BlockNumber = HOURS * 24;
+// pub const HOURS: BlockNumber = 600;
+// pub const DAYS: BlockNumber = HOURS * 24;
 pub const DOLLARS: Balance = 1_000_000_000_000;
+pub const CENTS: Balance = DOLLARS / 100;
 
-parameter_types! {
-	pub const MaxHeartbeatPerWorkerPerHour: u32 = 2;
-	pub const RoundInterval: BlockNumber = 1 * HOURS;
-	pub const DecayInterval: BlockNumber = 180 * DAYS;
-	pub const DecayFactor: Permill = Permill::from_percent(75);
-	pub const InitialReward: Balance = 129600000 * DOLLARS;
-	pub const TreasuryRation: u32 = 20_000;
-	pub const RewardRation: u32 = 80_000;
-	pub const OnlineRewardPercentage: Permill = Permill::from_parts(375_000);
-	pub const ComputeRewardPercentage: Permill = Permill::from_parts(625_000);
-	pub const OfflineOffenseSlash: Balance = 100 * DOLLARS;
-	pub const OfflineReportReward: Balance = 50 * DOLLARS;
+impl mq::Config for Test {
+	type Event = Event;
+	type QueueNotifyConfig = ();
 }
 
-impl phala::Config for Test {
+impl registry::Config for Test {
 	type Event = Event;
-	type Randomness = TestRandomness<Self>;
-	type TEECurrency = Balances;
 	type UnixTime = Timestamp;
-	type Treasury = ();
-	type WeightInfo = ();
-	type OnRoundEnd = ();
+}
 
-	// Parameters
-	type MaxHeartbeatPerWorkerPerHour = MaxHeartbeatPerWorkerPerHour;
-	type RoundInterval = RoundInterval;
-	type DecayInterval = DecayInterval;
-	type DecayFactor = DecayFactor;
-	type InitialReward = InitialReward;
-	type TreasuryRation = TreasuryRation;
-	type RewardRation = RewardRation;
-	type OnlineRewardPercentage = OnlineRewardPercentage;
-	type ComputeRewardPercentage = ComputeRewardPercentage;
-	type OfflineOffenseSlash = OfflineOffenseSlash;
-	type OfflineReportReward = OfflineReportReward;
+impl mining::Config for Test {
+	type Event = Event;
+	type ExpectedBlockTimeSec = ExpectedBlockTimeSec;
+	type Currency = Balances;
+	type Randomness = TestRandomness<Self>;
+	type MinStaking = MinMiningStaking;
+	type OnReward = PhalaStakePool;
+}
+
+impl stakepool::Config for Test {
+	type Event = Event;
+	type Currency = Balances;
+	type MinDeposit = MinDeposit;
 }
 
 // This function basically just builds a genesis storage key/value store according to
@@ -125,11 +121,29 @@ pub fn new_test_ext() -> sp_io::TestExternalities {
 	let mut t = system::GenesisConfig::default()
 		.build_storage::<Test>()
 		.unwrap();
-	crate::GenesisConfig::<Test> {
-		stakers: Default::default(),
-		contract_keys: Default::default(),
+	// Inject genesis storage
+	let zero_pubkey = sp_core::ecdsa::Public::from_raw([0u8; 33]);
+	let zero_ecdh_pubkey = Vec::from(&[0u8; 65][..]);
+	crate::registry::GenesisConfig::<Test> {
+		workers: vec![(zero_pubkey.clone(), zero_ecdh_pubkey, None)],
+		gatekeepers: vec![(zero_pubkey.clone())],
+		benchmark_duration: 0u32,
 	}
 	.assimilate_storage(&mut t)
 	.unwrap();
 	sp_io::TestExternalities::new(t)
+}
+
+pub fn set_block_1() {
+	System::set_block_number(1);
+}
+
+pub fn events() -> Vec<Event> {
+	let evt = System::events()
+		.into_iter()
+		.map(|evt| evt.event)
+		.collect::<Vec<_>>();
+	println!("event(): {:?}", evt);
+	System::reset_events();
+	evt
 }

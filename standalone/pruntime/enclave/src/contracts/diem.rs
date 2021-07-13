@@ -1,39 +1,35 @@
-use std::collections::btree_map::Entry::{Occupied, Vacant};
 use crate::std::collections::BTreeMap;
 use crate::std::string::String;
 use crate::std::vec::Vec;
+use std::collections::btree_map::Entry::{Occupied, Vacant};
 
 use anyhow::Result;
 use core::{fmt, str};
-use log::{error, info, warn};
+use log::{error, info};
 use serde::{Deserialize, Serialize};
 
 use crate::contracts;
 use crate::contracts::AccountIdWrapper;
-use crate::types::TxRef;
 use crate::TransactionStatus;
 
 //diem type
 use crate::std::string::ToString;
 use core::convert::TryFrom;
 use diem_crypto::hash::CryptoHash;
-use diem_types::account_address::AccountAddress;
+use diem_types::account_address::{AccountAddress, HashAccountAddress};
 use diem_types::account_state_blob::AccountStateBlob;
 use diem_types::epoch_change::EpochChangeProof;
 use diem_types::ledger_info::LedgerInfoWithSignatures;
-use diem_types::proof::{
-    AccountStateProof, SparseMerkleProof, TransactionAccumulatorProof, TransactionInfoWithProof,
-};
+use diem_types::proof::{AccountStateProof, TransactionAccumulatorProof, TransactionInfoWithProof};
 use diem_types::transaction::TransactionInfo;
 use diem_types::transaction::{SignedTransaction, Transaction, TransactionPayload};
 use diem_types::trusted_state::{TrustedState, TrustedStateChange};
 use move_core_types::transaction_argument::TransactionArgument;
 
-use crate::hex;
 use crate::std::borrow::ToOwned;
 use diem_crypto::{
     ed25519::{Ed25519PrivateKey, Ed25519PublicKey},
-    hash::HashValue,
+    //hash::HashValue,
     test_utils::KeyPair,
     Uniform,
 };
@@ -43,13 +39,19 @@ use diem_types::{
     chain_id::{ChainId, NamedChain},
     transaction::helpers::create_user_txn,
 };
+type SparseMerkleProof = diem_types::proof::SparseMerkleProof<AccountStateBlob>;
 use parity_scale_codec::{Decode, Encode};
+use phala_types::messaging::{DiemCommand as Command, MessageOrigin, PushCommand};
 use rand::{rngs::OsRng, Rng, SeedableRng};
+
+use super::NativeContext;
+
 const GAS_UNIT_PRICE: u64 = 0;
 const MAX_GAS_AMOUNT: u64 = 1_000_000;
 const TX_EXPIRATION: i64 = 180;
 const CHAIN_ID_UNINITIALIZED: u8 = 0;
-const ALICE_PRIVATE_KEY: &str = "818ad9a64e3d1bbc388f8bf1e43c78d125237b875a1b70a18f412f7d18efbeea";
+const ALICE_PRIVATE_KEY: &[u8] =
+    &hex_literal::hex!("818ad9a64e3d1bbc388f8bf1e43c78d125237b875a1b70a18f412f7d18efbeea");
 const ALICE_ADDRESS: &str = "D4F0C053205BA934BB2AC0C4E8479E77";
 
 const ALICE_PHALA: &str = "d43593c715fdd31c61141abd04a99fd6822c8558854ccde39a5684e7a56da27d";
@@ -96,37 +98,6 @@ impl fmt::Display for Error {
             Error::Other(e) => write!(f, "{}", e),
         }
     }
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub enum Command {
-    /// Sets the whitelisted accounts, in bcs encoded base64
-    AccountInfo {
-        account_info_b64: String,
-    },
-    /// Verifies a transactions
-    VerifyTransaction {
-        account_address: String,
-        transaction_with_proof_b64: String,
-    },
-    /// Sets the trusted state. The owner can only initialize the bridge with the genesis state
-    /// once.
-    SetTrustedState {
-        trusted_state_b64: String,
-        chain_id: u8,
-    },
-    VerifyEpochProof {
-        ledger_info_with_signatures_b64: String,
-        epoch_change_proof_b64: String,
-    },
-
-    NewAccount {
-        seq_number: u64,
-    },
-    TransferXUS {
-        to: String,
-        amount: u64,
-    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -234,7 +205,7 @@ pub struct Diem {
 impl Diem {
     pub fn new() -> Self {
         let alice_priv_key =
-            Ed25519PrivateKey::from_bytes_unchecked(&hex::decode_hex(ALICE_PRIVATE_KEY)).expect("Bad private key");
+            Ed25519PrivateKey::from_bytes_unchecked(ALICE_PRIVATE_KEY).expect("Bad private key");
         let alice_key_pair: KeyPair<Ed25519PrivateKey, Ed25519PublicKey> =
             KeyPair::from(alice_priv_key);
         let alice_account_address =
@@ -250,14 +221,12 @@ impl Diem {
             is_child: false,
         };
 
+        let alice_addr = AccountIdWrapper::from_hex(ALICE_PHALA).expect("Bad init master account");
         let mut accounts = BTreeMap::<AccountIdWrapper, Account>::new();
-        accounts.insert(AccountIdWrapper::from_hex(ALICE_PHALA), alice_account);
+        accounts.insert(alice_addr.clone(), alice_account);
 
         let mut address = BTreeMap::<String, AccountIdWrapper>::new();
-        address.insert(
-            ALICE_ADDRESS.to_string(),
-            AccountIdWrapper::from_hex(ALICE_PHALA),
-        );
+        address.insert(ALICE_ADDRESS.to_string(), alice_addr);
 
         let mut account_address: Vec<String> = Vec::new();
         account_address.push(ALICE_ADDRESS.to_string());
@@ -302,17 +271,17 @@ impl Diem {
             return Ok(transaction);
         }
 
-        let signed_tx: SignedTransaction = transaction
+        let signed_tx: &SignedTransaction = transaction
             .as_signed_user_txn()
-            .expect("This must be a user tx; qed.")
-            .clone();
-        if signed_tx.raw_txn.sender != address {
+            .expect("This must be a user tx; qed.");
+        let raw_transaction = signed_tx.clone().into_raw_transaction();
+        if raw_transaction.sender() != address {
             // Incoming tx doesn't need to be sequential
             let mut found = false;
-            if let TransactionPayload::Script(script) = signed_tx.raw_txn.payload {
-                for arg in script.args {
+            if let TransactionPayload::Script(script) = raw_transaction.clone().into_payload() {
+                for arg in script.args() {
                     if let TransactionArgument::Address(recv_address) = arg {
-                        if recv_address == address {
+                        if recv_address == &address {
                             found = true;
                             break;
                         }
@@ -330,7 +299,7 @@ impl Diem {
         } else {
             // Outgoing tx must be synced sequencely
             if let Some(seq) = self.seq_number.get(&account_address) {
-                if seq + 1 != signed_tx.raw_txn.sequence_number {
+                if seq + 1 != raw_transaction.sequence_number() {
                     error!("Bad sequence number");
 
                     return Err(anyhow::Error::msg(Error::Other(String::from(
@@ -339,7 +308,7 @@ impl Diem {
                 }
             }
             self.seq_number
-                .insert(account_address.clone(), signed_tx.raw_txn.sequence_number);
+                .insert(account_address.clone(), raw_transaction.sequence_number());
         }
 
         Ok(transaction)
@@ -362,12 +331,13 @@ impl Diem {
             .get_mut(&o)
             .ok_or(anyhow::Error::msg(Error::Other("Bad account".to_string())))?;
 
-        let signed_tx: SignedTransaction = transaction.as_signed_user_txn()
-            .expect("Not a signed transaction")
-            .clone();
-        let sequence_number = signed_tx.raw_txn.sequence_number;
+        let signed_tx: &SignedTransaction = transaction
+            .as_signed_user_txn()
+            .expect("Not a signed transaction");
+        let raw_transaction = signed_tx.clone().into_raw_transaction();
+        let sequence_number = raw_transaction.sequence_number();
         // TODO: check the whitelisted script here
-        if let TransactionPayload::Script(script) = signed_tx.raw_txn.payload {
+        if let TransactionPayload::Script(script) = raw_transaction.clone().into_payload() {
             if transaction_builder::get_transaction_name(script.code()).as_str()
                 != "peer_to_peer_with_metadata_transaction"
             {
@@ -376,13 +346,11 @@ impl Diem {
             }
             use TransactionArgument::*;
             let args = script.args();
-            if let [Address(_addr), U64(amount), U8Vector(_), U8Vector(_)] =
-                &args[..]
-            {
-                if signed_tx.raw_txn.sender != address {
+            if let [Address(_addr), U64(amount), U8Vector(_), U8Vector(_)] = &args[..] {
+                if raw_transaction.sender() != address {
                     account.free += amount;
 
-                    let sender_address = signed_tx.raw_txn.sender.to_string();
+                    let sender_address = raw_transaction.sender().to_string();
                     if let Some(so) = self.address.get(&sender_address) {
                         if let Some(sender_account) = self.accounts.get_mut(&so) {
                             if sender_account.locked >= *amount {
@@ -394,7 +362,7 @@ impl Diem {
                         }
                     }
                 } else {
-                    if account.is_child && signed_tx.raw_txn.sequence_number != account.sequence {
+                    if account.is_child && raw_transaction.sequence_number() != account.sequence {
                         return Err(anyhow::Error::msg(Error::Other("Bad sequence".to_string())))?;
                     }
 
@@ -545,18 +513,28 @@ fn auth_key_prefix(auth_key: Vec<u8>) -> Vec<u8> {
     auth_key[0..16].to_vec()
 }
 
-impl contracts::Contract<Command, Request, Response> for Diem {
+impl contracts::NativeContract for Diem {
+    type Cmd = Command;
+    type Event = ();
+    type QReq = Request;
+    type QResp = Response;
+
     fn id(&self) -> contracts::ContractId {
         contracts::DIEM
     }
 
     fn handle_command(
         &mut self,
-        origin: &chain::AccountId,
-        _txref: &TxRef,
-        cmd: Command,
+        _context: &NativeContext,
+        origin: MessageOrigin,
+        cmd: PushCommand<Self::Cmd>,
     ) -> TransactionStatus {
-        match cmd {
+        let origin = match origin {
+            MessageOrigin::AccountId(acc) => acc,
+            _ => return TransactionStatus::BadOrigin,
+        };
+
+        match cmd.command {
             Command::AccountInfo { account_info_b64 } => {
                 info!("command account_info_b64:{:?}", account_info_b64);
                 if let Ok(account_data) = base64::decode(&account_info_b64) {
@@ -625,13 +603,13 @@ impl contracts::Contract<Command, Request, Response> for Diem {
                         .expect("Bad trusted state data");
                 let ledger_info_with_signatures: LedgerInfoWithSignatures =
                     bcs::from_bytes(&ledger_info_with_signatures_data)
-                    .expect("Unable to parse ledger info");
+                        .expect("Unable to parse ledger info");
                 let epoch_change_proof_data = base64::decode(epoch_change_proof_b64)
                     .or(Err(TransactionStatus::BadEpochChangedProofData))
                     .expect("Bad epoch changed proof data");
                 let epoch_change_proof: EpochChangeProof =
                     bcs::from_bytes(&epoch_change_proof_data)
-                    .expect("Unable to parse epoch changed proof data");
+                        .expect("Unable to parse epoch changed proof data");
 
                 info!(
                     "ledger_info_with_signatures: {:?}",
@@ -708,7 +686,7 @@ impl contracts::Contract<Command, Request, Response> for Diem {
                     if tx_hash
                         != transaction_with_proof
                             .transaction_info
-                            .transaction_hash
+                            .transaction_hash()
                             .to_hex()
                     {
                         error!("transaction hash doesn't match");
@@ -740,16 +718,19 @@ impl contracts::Contract<Command, Request, Response> for Diem {
                 }
             }
             Command::NewAccount { seq_number } => {
-                let o = AccountIdWrapper(origin.clone());
+                let o = AccountIdWrapper::from(origin);
                 info!("NewAccount {:}, seq_number:{:}", o.to_string(), seq_number);
 
-                let alice = AccountIdWrapper::from_hex(ALICE_PHALA);
+                let alice =
+                    AccountIdWrapper::from_hex(ALICE_PHALA).expect("Bad init master account");
                 if o == alice {
                     error!("Alice can't execute NewAccount command");
                     return TransactionStatus::InvalidAccount;
                 }
 
-                let alice_account = self.accounts.get(&alice)
+                let alice_account = self
+                    .accounts
+                    .get(&alice)
                     .expect("Alice account was required");
 
                 let alice_key_pair = &alice_account.key;
@@ -812,7 +793,7 @@ impl contracts::Contract<Command, Request, Response> for Diem {
                 TransactionStatus::Ok
             }
             Command::TransferXUS { to, amount } => {
-                let o = AccountIdWrapper(origin.clone());
+                let o = AccountIdWrapper::from(origin);
                 info!(
                     "TransferXUS from: {:}, to: {:}, amount: {:}",
                     o.to_string(),
@@ -916,8 +897,8 @@ impl contracts::Contract<Command, Request, Response> for Diem {
                         match self.pending_transactions.entry(sender_address) {
                             Vacant(entry) => entry.insert(vec![]),
                             Occupied(entry) => entry.into_mut(),
-                        }.push(pending_tx);
-
+                        }
+                        .push(pending_tx);
 
                         sender_account.locked += amount;
                         sender_account.free -= amount;
@@ -987,8 +968,6 @@ impl contracts::Contract<Command, Request, Response> for Diem {
             Ok(resp) => resp,
         }
     }
-
-    fn handle_event(&mut self, _ce: chain::Event) {}
 }
 
 /// Parses a TrustedState from a bcs encoded LedgerInfoWithSignature in base64

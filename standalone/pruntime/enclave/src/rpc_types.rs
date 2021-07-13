@@ -6,6 +6,8 @@ pub struct InitRuntimeReq {
     pub skip_ra: bool,
     pub bridge_genesis_info_b64: String,
     pub debug_set_key: Option<String>,
+    pub genesis_state_b64: String,
+    pub operator_hex: Option<String>,
 }
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct InitRuntimeResp {
@@ -30,7 +32,6 @@ pub struct AttestationReport {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct TestReq {
     pub test_parse_block: Option<bool>,
-    pub test_bridge: Option<bool>,
     pub test_ecdh: Option<TestEcdhParam>,
 }
 #[derive(Serialize, Deserialize, Debug)]

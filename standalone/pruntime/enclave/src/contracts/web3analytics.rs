@@ -1,17 +1,17 @@
-use super::TransactionStatus;
+use super::{NativeContext, TransactionStatus};
 use crate::contracts::AccountIdWrapper;
 use crate::cryptography::aead;
-use crate::hex;
 use crate::std::collections::BTreeMap;
 use crate::std::collections::HashMap;
 use crate::std::prelude::v1::*;
 use crate::std::vec::Vec;
 use anyhow::Result;
 use core::fmt;
+use phala_mq::MessageOrigin;
 use serde::{Deserialize, Serialize};
 
 use crate::contracts;
-use crate::types::TxRef;
+use phala_types::messaging::{PushCommand, Web3AnalyticsCommand as Command};
 
 use super::woothee;
 
@@ -23,7 +23,8 @@ const HOUR_IN_SECONDS: u32 = 60 * MINUTE_IN_SECONDS;
 const DAY_IN_SECONDS: u32 = 24 * HOUR_IN_SECONDS;
 const WEEK_IN_SECONDS: u32 = 7 * DAY_IN_SECONDS;
 
-const KEY: &str = "290c3c5d812a4ba7ce33adf09598a462692a615beb6c80fdafb3f9e3bbef8bc6";
+const KEY: &[u8] =
+    &hex_literal::hex!("290c3c5d812a4ba7ce33adf09598a462692a615beb6c80fdafb3f9e3bbef8bc6");
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct PageView {
@@ -137,11 +138,6 @@ impl fmt::Display for Error {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-pub enum Command {
-    SetConfiguration { skip_stat: bool },
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum Request {
     SetPageView {
@@ -248,8 +244,7 @@ impl Web3Analytics {
             weekly_sites: Vec::<WeeklySite>::new(),
             weekly_devices: Vec::<WeeklyDevice>::new(),
             total_stat: HourlyPageViewStat::default(),
-
-            key: hex::decode_hex(KEY),
+            key: KEY.to_owned(),
 
             parser: woothee::parser::Parser::new(),
 
@@ -897,20 +892,30 @@ impl Web3Analytics {
     }
 }
 
-impl contracts::Contract<Command, Request, Response> for Web3Analytics {
+impl contracts::NativeContract for Web3Analytics {
+    type Cmd = Command;
+    type Event = ();
+    type QReq = Request;
+    type QResp = Response;
+
     fn id(&self) -> contracts::ContractId {
         contracts::WEB3_ANALYTICS
     }
 
     fn handle_command(
         &mut self,
-        origin: &chain::AccountId,
-        _txref: &TxRef,
-        cmd: Command,
+        _context: &NativeContext,
+        origin: MessageOrigin,
+        cmd: PushCommand<Self::Cmd>,
     ) -> TransactionStatus {
-        let status = match cmd {
+        let origin = match origin {
+            MessageOrigin::AccountId(acc) => acc,
+            _ => return TransactionStatus::BadOrigin,
+        };
+
+        let status = match cmd.command {
             Command::SetConfiguration { skip_stat } => {
-                let o = AccountIdWrapper(origin.clone());
+                let o = AccountIdWrapper::from(origin);
                 log::info!("SetConfiguration: [{}] -> {}", o.to_string(), skip_stat);
 
                 if skip_stat {
@@ -937,7 +942,7 @@ impl contracts::Contract<Command, Request, Response> for Web3Analytics {
                         if page_view.uid.len() == 64
                             && self
                                 .no_tracking
-                                .contains_key(&AccountIdWrapper::from_hex(&page_view.uid))
+                                .contains_key(&AccountIdWrapper::from_hex(&page_view.uid)?)
                         {
                             continue;
                         }

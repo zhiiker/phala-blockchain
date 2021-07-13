@@ -13,3 +13,5 @@ structopt = "0.3"
 sp-runtime = { path = "../../substrate/primitives/runtime" }
 
 phala-types = { path = "../../common/types" }
+enclave-api = { path = "../../standalone/pruntime/enclave-api" }
+phala-crypto = { path = "../../crates/crypto" }

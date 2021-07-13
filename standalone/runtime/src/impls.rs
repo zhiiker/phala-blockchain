@@ -29,7 +29,7 @@ impl OnUnbalanced<NegativeImbalance> for Author {
 
 #[cfg(test)]
 mod multiplier_tests {
-	use sp_runtime::{assert_eq_error_rate, FixedPointNumber, traits::Convert};
+	use sp_runtime::{assert_eq_error_rate, FixedPointNumber, traits::{Convert, One, Zero}};
 	use pallet_transaction_payment::{Multiplier, TargetedFeeAdjustment};
 
 	use crate::{
@@ -165,6 +165,7 @@ mod multiplier_tests {
 	}
 
 	#[test]
+	#[ignore]
 	fn min_change_per_day() {
 		run_with_system_weight(max_normal(), || {
 			let mut fm = Multiplier::one();
@@ -307,7 +308,7 @@ mod multiplier_tests {
 	fn weight_to_fee_should_not_overflow_on_large_weights() {
 		let kb = 1024 as Weight;
 		let mb = kb * kb;
-		let max_fm = Multiplier::saturating_from_integer(i128::max_value());
+		let max_fm = Multiplier::saturating_from_integer(i128::MAX);
 
 		// check that for all values it can compute, correctly.
 		vec![

@@ -1,13 +1,15 @@
-use anyhow::{anyhow, Result};
-use std::cmp;
-use codec::{Encode, Decode};
+use anyhow::Result;
+use phala_types::messaging::{MessageOrigin, SignedMessage};
+use codec::Decode;
 use core::marker::PhantomData;
 use log::{error, info};
+
+use crate::chain_client::fetch_mq_ingress_seq;
 
 use super::{
     update_signer_nonce,
     error::Error,
-    types::{ReqData, QueryRespData, TransferData},
+    types::GetEgressMessagesReq,
     runtimes,
     XtClient, PrClient, SrSigner
 };
@@ -33,88 +35,56 @@ impl<'a> MsgSync<'a> {
         }
     }
 
-    /// Syncs the worker egress messages when available
-    pub async fn maybe_sync_worker_egress(&mut self, sequence: &mut u64) -> Result<()> {
-        // Check pending messages in worker egress queue
-        let query_resp = self.pr.query(
-            0, ReqData::GetWorkerEgress { start_sequence: *sequence }).await?;
-        let msg_data = match query_resp {
-            QueryRespData::GetWorkerEgress { length, encoded_egress_b64 } => {
-                info!("maybe_sync_worker_egress: got {} messages", length);
-                base64::decode(&encoded_egress_b64)
-                    .map_err(|_| Error::FailedToDecode)?
-            }
-            _ => return Err(anyhow!(Error::FailedToDecode))
-        };
-        let msg_queue: Vec<phala_types::SignedWorkerMessage> = Decode::decode(&mut &msg_data[..])
-            .map_err(|_| Error::FailedToDecode)?;
-        // No pending message. We are done.
-        if msg_queue.is_empty() {
-            return Ok(());
-        }
-        // Send messages
-        self.maybe_update_signer_nonce().await?;
-        let mut next_seq = *sequence;
-        for msg in &msg_queue {
-            let msg_seq = msg.data.sequence;
-            if msg_seq < *sequence {    // This seq is 0-based
-                info!("Worker msg {} has been submitted. Skipping...", msg_seq);
-                continue;
-            }
-            // STATUS: claim_tx_sent = match msg.data.payload { WorkerMessagePayload::Heartbeat { block_num, ... } => block_num }
-            next_seq = cmp::max(next_seq, msg_seq + 1);
-            let ret = self.client.submit(runtimes::phala::SyncWorkerMessageCall {
-                _runtime: PhantomData,
-                msg: msg.encode(),
-            }, self.signer).await;
-            if let Err(err) = ret {
-                error!("Failed to submit tx: {:?}", err);
-                // TODO: Should we fail early?
-                // STATUS: worth reporting error!
-            }
-            self.signer.increment_nonce();
-        }
-        *sequence = next_seq;
-        Ok(())
-    }
+    pub async fn maybe_sync_mq_egress(&mut self) -> Result<()> {
+        // Send the query
+        let resp = self
+            .pr
+            .req_decode("get_egress_messages", GetEgressMessagesReq {})
+            .await?;
+        let messages_scl = base64::decode(&resp.messages).map_err(|_| Error::FailedToDecode)?;
+        let messages: Vec<(MessageOrigin, Vec<SignedMessage>)> =
+            Decode::decode(&mut &messages_scl[..]).map_err(|_| Error::FailedToDecode)?;
 
-    /// Syncs the Balances egress messages when available
-    pub async fn maybe_sync_balances_egress(&mut self, sequence: &mut u64) -> Result<()> {
-        // Check pending messages in Balances' egress queue
-        let query_resp = self.pr.query(2, ReqData::PendingChainTransfer {sequence: *sequence}).await?;
-        let transfer_data = match query_resp {
-            QueryRespData::PendingChainTransfer { transfer_queue_b64 } =>
-                base64::decode(&transfer_queue_b64)
-                    .map_err(|_| Error::FailedToDecode)?,
-            _ => return Err(anyhow!(Error::FailedToDecode))
-        };
-        let transfer_queue: Vec<TransferData> = Decode::decode(&mut &transfer_data[..])
-            .map_err(|_|Error::FailedToDecode)?;
         // No pending message. We are done.
-        if transfer_queue.is_empty() {
+        if messages.is_empty() {
             return Ok(());
         }
-        // Send messages
+
         self.maybe_update_signer_nonce().await?;
-        let mut next_seq = *sequence;
-        for transfer_data in &transfer_queue {
-            let msg_seq = transfer_data.data.sequence;
-            if msg_seq <= *sequence {   // This seq is 1-based
-                info!("Msg {} has been submitted. Skipping...", msg_seq);
+
+        for (sender, messages) in messages {
+            if messages.is_empty() {
                 continue;
             }
-            next_seq = cmp::max(next_seq, msg_seq);
-            let ret = self.client.submit(runtimes::phala::TransferToChainCall {
-                _runtime: PhantomData,
-                data: transfer_data.encode()
-            }, self.signer).await;
-            if let Err(err) = ret {
-                error!("Failed to submit tx: {:?}", err);
-                // TODO: Should we fail early?
+            let min_seq = fetch_mq_ingress_seq(self.client, sender.clone()).await?;
+            for message in messages {
+                if message.sequence < min_seq {
+                    info!("{} has been submitted. Skipping...", message.sequence);
+                    continue;
+                }
+                info!(
+                    "Submitting message: sender={:?} seq={} dest={}",
+                    sender,
+                    message.sequence,
+                    String::from_utf8_lossy(&message.message.destination.path()[..])
+                );
+                let ret = self
+                    .client
+                    .submit(
+                        runtimes::phala_mq::SyncOffchainMessageCall {
+                            _runtime: PhantomData,
+                            message,
+                        },
+                        self.signer,
+                    )
+                    .await;
+                if let Err(err) = ret {
+                    error!("Failed to submit tx: {:?}", err);
+                    // TODO: Should we fail early?
+                }
+                self.signer.increment_nonce();
             }
-            self.signer.increment_nonce();
         }
-        *sequence = next_seq;
         Ok(())
     }
 

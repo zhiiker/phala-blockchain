@@ -1,15 +1,16 @@
 use crate::std::string::String;
 use crate::std::vec::Vec;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use core::fmt;
 use serde::{Deserialize, Serialize};
 
 use sp_core::crypto::Pair;
+use parity_scale_codec::{Decode, Encode};
 
 pub mod aead;
 pub mod ecdh;
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Encode, Decode)]
 pub struct AeadCipher {
     pub iv_b64: String,
     pub cipher_b64: String,
@@ -34,7 +35,7 @@ pub fn decrypt(
         .map_err(|_| anyhow::Error::msg(Error::BadInput("iv_b64")))?;
     // ECDH derived secret
     let secret = ecdh::agree(privkey, &pubkey);
-    log::info!("Agreed SK: {:?}", crate::hex::encode_hex_compact(&secret));
+    log::info!("Agreed SK: {:?}", hex::encode(&secret));
     let msg = aead::decrypt(iv.as_slice(), secret.as_slice(), &mut data);
     Ok(DecryptOutput {
         msg: msg.to_vec(),
@@ -63,8 +64,9 @@ impl Origin {
     pub fn verify(&self, msg: &[u8]) -> Result<bool> {
         let sig = base64::decode(&self.sig_b64)
             .map_err(|_| anyhow::Error::msg(Error::BadInput("sig_b64")))?;
-        let pubkey = crate::hex::decode_hex(&self.origin);
-        // .map_err(|_| Error::BadInput("origin"))?;   TODO: handle error
+        let pubkey: Vec<_> = hex::decode(&self.origin)
+            .map_err(anyhow::Error::msg)
+            .context("Failed to decode origin hex")?;
 
         let result = match self.sig_type {
             SignatureType::Ed25519 => verify::<sp_core::ed25519::Pair>(&sig, msg, &pubkey),

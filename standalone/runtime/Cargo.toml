@@ -13,10 +13,11 @@ targets = ["x86_64-unknown-linux-gnu"]
 
 [dependencies]
 # third-party dependencies
-codec = { package = "parity-scale-codec", version = "2.1", default-features = false, features = ["derive"] }
+codec = { package = "parity-scale-codec", version = "2.2", default-features = false, features = ["derive", "max-encoded-len"] }
 static_assertions = "1.1.0"
 hex-literal = { version = "0.3.1", optional = true }
 log = { version = "0.4.14", default-features = false }
+phala-types = { default-features = false, path = "../../common/types" }
 
 # primitives
 sp-authority-discovery = { version = "3.0.0", default-features = false, path = "../../substrate/primitives/authority-discovery" }
@@ -39,31 +40,27 @@ sp-npos-elections = { version = "3.0.0", default-features = false, path = "../..
 # frame dependencies
 frame-executive = { version = "3.0.0", default-features = false, path = "../../substrate/frame/executive" }
 frame-benchmarking = { version = "3.1.0", default-features = false, path = "../../substrate/frame/benchmarking", optional = true }
+frame-election-provider-support = { version = "3.0.0", default-features = false, path = "../../substrate/frame/election-provider-support" }
 frame-support = { version = "3.0.0", default-features = false, path = "../../substrate/frame/support" }
 frame-system = { version = "3.0.0", default-features = false, path = "../../substrate/frame/system" }
 frame-system-benchmarking = { version = "3.0.0", default-features = false, path = "../../substrate/frame/system/benchmarking", optional = true }
 frame-system-rpc-runtime-api = { version = "3.0.0", default-features = false, path = "../../substrate/frame/system/rpc/runtime-api/" }
 frame-try-runtime = { version = "0.9.0", default-features = false, path = "../../substrate/frame/try-runtime", optional = true }
-pallet-assets = { version = "3.0.0", default-features = false, path = "../../substrate/frame/assets" }
 pallet-authority-discovery = { version = "3.0.0", default-features = false, path = "../../substrate/frame/authority-discovery" }
 pallet-authorship = { version = "3.0.0", default-features = false, path = "../../substrate/frame/authorship" }
 pallet-babe = { version = "3.0.0", default-features = false, path = "../../substrate/frame/babe" }
 pallet-balances = { version = "3.0.0", default-features = false, path = "../../substrate/frame/balances" }
 pallet-bounties = { version = "3.0.0", default-features = false, path = "../../substrate/frame/bounties" }
 pallet-collective = { version = "3.0.0", default-features = false, path = "../../substrate/frame/collective" }
-pallet-contracts = { version = "3.0.0", default-features = false, path = "../../substrate/frame/contracts" }
-pallet-contracts-primitives = { version = "3.0.0", default-features = false, path = "../../substrate/frame/contracts/common/" }
-pallet-contracts-rpc-runtime-api = { version = "3.0.0", default-features = false, path = "../../substrate/frame/contracts/rpc/runtime-api/" }
 pallet-democracy = { version = "3.0.0", default-features = false, path = "../../substrate/frame/democracy" }
-pallet-elections-phragmen = { version = "3.0.0", default-features = false, path = "../../substrate/frame/elections-phragmen" }
+pallet-elections-phragmen = { version = "4.0.0", default-features = false, path = "../../substrate/frame/elections-phragmen" }
 pallet-election-provider-multi-phase = { version = "3.0.0", default-features = false, path = "../../substrate/frame/election-provider-multi-phase" }
-pallet-grandpa = { version = "3.0.0", default-features = false, path = "../../substrate/frame/grandpa" }
+pallet-grandpa = { version = "3.1.0", default-features = false, path = "../../substrate/frame/grandpa" }
 pallet-im-online = { version = "3.0.0", default-features = false, path = "../../substrate/frame/im-online" }
 pallet-indices = { version = "3.0.0", default-features = false, path = "../../substrate/frame/indices" }
 pallet-identity = { version = "3.0.0", default-features = false, path = "../../substrate/frame/identity" }
 pallet-lottery = { version = "3.0.0", default-features = false, path = "../../substrate/frame/lottery" }
 pallet-membership = { version = "3.0.0", default-features = false, path = "../../substrate/frame/membership" }
-pallet-mmr = { version = "3.0.0", default-features = false, path = "../../substrate/frame/merkle-mountain-range" }
 pallet-multisig = { version = "3.0.0", default-features = false, path = "../../substrate/frame/multisig" }
 pallet-offences = { version = "3.0.0", default-features = false, path = "../../substrate/frame/offences" }
 pallet-offences-benchmarking = { version = "3.0.0", path = "../../substrate/frame/offences/benchmarking", default-features = false, optional = true }
@@ -85,26 +82,26 @@ pallet-transaction-payment = { version = "3.0.0", default-features = false, path
 pallet-transaction-payment-rpc-runtime-api = { version = "3.0.0", default-features = false, path = "../../substrate/frame/transaction-payment/rpc/runtime-api/" }
 pallet-vesting = { version = "3.0.0", default-features = false, path = "../../substrate/frame/vesting" }
 
-pallet-phala = { default-features = false, path = "../../pallets/phala", package = "pallet-phala" }
-pallet-claim = { default-features = false, path = "../../pallets/claim", package = "pallet-claim" }
-pallet-mining-staking = { default-features = false, path = "../../pallets/mining_staking", package = "pallet-mining-staking" }
+pallet-kitties = { default-features = false, path = "../../pallets/kitties", package = "pallet-kitties" }
+phala-pallets = { default-features = false, path = "../../pallets/phala", package = "phala-pallets" }
+pallet-bridge = { default-features = false, path = "../../pallets/bridge", package = "pallet-bridge" }
+pallet-bridge-transfer = { default-features = false, path = "../../pallets/bridge_transfer", package = "pallet-bridge-transfer" }
 
 native-nostd-hasher = { version = "3.0.0", path = "../../native-nostd-hasher", optional = true }
 
 [build-dependencies]
-substrate-wasm-builder = { version = "4.0.0", path = "../../substrate/utils/wasm-builder" }
+substrate-wasm-builder = { version = "4.0.0", path = "../../substrate/utils/wasm-builder", optional = true }
 
 [dev-dependencies]
 sp-io = { version = "3.0.0", path = "../../substrate/primitives/io" }
 
 [features]
 default = ["std", "include-wasm"]
-include-wasm = []
+include-wasm = ["substrate-wasm-builder"]
 native-nostd = ["native-nostd-hasher"]
-with-tracing = [ "frame-executive/with-tracing" ]
+with-tracing = ["frame-executive/with-tracing"]
 std = [
 	"sp-authority-discovery/std",
-	"pallet-assets/std",
 	"pallet-authority-discovery/std",
 	"pallet-authorship/std",
 	"sp-consensus-babe/std",
@@ -114,9 +111,6 @@ std = [
 	"sp-block-builder/std",
 	"codec/std",
 	"pallet-collective/std",
-	"pallet-contracts/std",
-	"pallet-contracts-primitives/std",
-	"pallet-contracts-rpc-runtime-api/std",
 	"pallet-democracy/std",
 	"pallet-elections-phragmen/std",
 	"frame-executive/std",
@@ -126,7 +120,6 @@ std = [
 	"sp-inherents/std",
 	"pallet-lottery/std",
 	"pallet-membership/std",
-	"pallet-mmr/std",
 	"pallet-multisig/std",
 	"pallet-identity/std",
 	"pallet-scheduler/std",
@@ -164,8 +157,10 @@ std = [
 	"log/std",
 	"frame-try-runtime/std",
 	"sp-npos-elections/std",
-	"pallet-phala/std",
-	"pallet-claim/std",
+	"pallet-kitties/std",
+	"phala-pallets/std",
+	"pallet-bridge/std",
+	"pallet-bridge-transfer/std",
 ]
 runtime-benchmarks = [
 	"frame-benchmarking",
@@ -173,12 +168,10 @@ runtime-benchmarks = [
 	"frame-system/runtime-benchmarks",
 	"pallet-election-provider-multi-phase/runtime-benchmarks",
 	"sp-runtime/runtime-benchmarks",
-	"pallet-assets/runtime-benchmarks",
 	"pallet-babe/runtime-benchmarks",
 	"pallet-balances/runtime-benchmarks",
 	"pallet-bounties/runtime-benchmarks",
 	"pallet-collective/runtime-benchmarks",
-	"pallet-contracts/runtime-benchmarks",
 	"pallet-democracy/runtime-benchmarks",
 	"pallet-elections-phragmen/runtime-benchmarks",
 	"pallet-grandpa/runtime-benchmarks",
@@ -187,7 +180,6 @@ runtime-benchmarks = [
 	"pallet-indices/runtime-benchmarks",
 	"pallet-lottery/runtime-benchmarks",
 	"pallet-membership/runtime-benchmarks",
-	"pallet-mmr/runtime-benchmarks",
 	"pallet-multisig/runtime-benchmarks",
 	"pallet-proxy/runtime-benchmarks",
 	"pallet-scheduler/runtime-benchmarks",
@@ -202,20 +194,18 @@ runtime-benchmarks = [
 	"pallet-session-benchmarking",
 	"frame-system-benchmarking",
 	"hex-literal",
-	"pallet-phala/runtime-benchmarks",
+	"phala-pallets/runtime-benchmarks",
 ]
 try-runtime = [
 	"frame-executive/try-runtime",
 	"frame-try-runtime",
 	"frame-system/try-runtime",
-	"pallet-assets/try-runtime",
 	"pallet-authority-discovery/try-runtime",
 	"pallet-authorship/try-runtime",
 	"pallet-babe/try-runtime",
 	"pallet-balances/try-runtime",
 	"pallet-bounties/try-runtime",
 	"pallet-collective/try-runtime",
-	"pallet-contracts/try-runtime",
 	"pallet-democracy/try-runtime",
 	"pallet-elections-phragmen/try-runtime",
 	"pallet-grandpa/try-runtime",
@@ -223,7 +213,6 @@ try-runtime = [
 	"pallet-indices/try-runtime",
 	"pallet-lottery/try-runtime",
 	"pallet-membership/try-runtime",
-	"pallet-mmr/try-runtime",
 	"pallet-multisig/try-runtime",
 	"pallet-identity/try-runtime",
 	"pallet-scheduler/try-runtime",
